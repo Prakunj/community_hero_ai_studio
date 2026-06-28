@@ -1949,6 +1949,116 @@ Address: "${issue.address}"`;
     }
   });
 
+  // In-memory cache for insights (1 hour TTL)
+  let insightsCache: { data: any; expires_at: number } | null = null;
+  const INSIGHTS_TTL_MS = 24 * 60 * 60 * 1000;
+
+  // 7. GET /api/insights — AI-powered predictive analytics
+  app.get("/api/insights", async (req, res) => {
+    const forceRefresh = req.query.refresh === "1";
+    if (!forceRefresh && insightsCache && Date.now() < insightsCache.expires_at) {
+      return res.json(insightsCache.data);
+    }
+    try {
+      const supabase = getSupabase();
+      const { data: issues, error } = await supabase.from("issues").select("*");
+      if (error) throw error;
+      const safeIssues: any[] = issues || [];
+
+      const categories = ["pothole", "garbage", "water_leakage", "streetlight", "drain", "other"];
+      const now = new Date();
+
+      // Category breakdown
+      const categoryStats = categories.map(cat => {
+        const catIssues = safeIssues.filter(i => i.category === cat);
+        const resolved = catIssues.filter(i => i.status === "resolved");
+        const times = resolved
+          .filter(i => i.created_at && i.updated_at)
+          .map(i => (new Date(i.updated_at).getTime() - new Date(i.created_at).getTime()) / 86400000);
+        return {
+          category: cat,
+          total: catIssues.length,
+          resolved: resolved.length,
+          unresolved: catIssues.filter(i => !["resolved", "rejected"].includes(i.status)).length,
+          avg_resolution_days: times.length ? Math.round((times.reduce((a, b) => a + b, 0) / times.length) * 10) / 10 : null,
+        };
+      });
+
+      // Weekly trend (last 4 weeks)
+      const weeklyTrend = Array.from({ length: 4 }, (_, idx) => {
+        const wStart = new Date(now); wStart.setDate(wStart.getDate() - (4 - idx) * 7);
+        const wEnd = new Date(now); wEnd.setDate(wEnd.getDate() - (3 - idx) * 7);
+        const wIssues = safeIssues.filter(i => { const d = new Date(i.created_at); return d >= wStart && d < wEnd; });
+        const counts: any = { label: `W${idx + 1}`, total: wIssues.length };
+        categories.forEach(cat => { counts[cat] = wIssues.filter(i => i.category === cat).length; });
+        return counts;
+      });
+
+      // Geographic hotspots (0.05° grid)
+      const grid: Record<string, { lat: number; lng: number; count: number; cats: Record<string, number> }> = {};
+      safeIssues
+        .filter(i => !["resolved", "rejected"].includes(i.status) && i.lat && i.lng)
+        .forEach(i => {
+          const key = `${(Math.round(i.lat / 0.05) * 0.05).toFixed(2)},${(Math.round(i.lng / 0.05) * 0.05).toFixed(2)}`;
+          if (!grid[key]) grid[key] = { lat: Math.round(i.lat / 0.05) * 0.05, lng: Math.round(i.lng / 0.05) * 0.05, count: 0, cats: {} };
+          grid[key].count++;
+          grid[key].cats[i.category] = (grid[key].cats[i.category] || 0) + 1;
+        });
+      const hotspots = Object.values(grid)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5)
+        .map(h => ({ lat: h.lat, lng: h.lng, count: h.count, topCategory: Object.entries(h.cats).sort(([, a], [, b]) => (b as number) - (a as number))[0]?.[0] || "unknown" }));
+
+      const stats = { totalIssues: safeIssues.length, categoryStats, weeklyTrend, hotspots };
+
+      if (!ai) return res.status(503).json({ error: "AI not configured" });
+
+      const prompt = `You are an urban analytics AI for a civic issue reporting platform in India. Analyze the data below and return ONLY valid JSON with predictions.
+
+Data:
+${JSON.stringify(stats)}
+
+Return exactly this JSON structure (no markdown, no extra text):
+{
+  "health_score": <integer 0-100, higher = better community health>,
+  "summary": "<2 sentences summarising trends and outlook>",
+  "predictions": [
+    { "category": "<category>", "trend": "increasing|stable|decreasing", "urgency": "low|medium|high|critical", "forecast": "<one sentence prediction for next 30 days>", "reason": "<data-driven reason>" }
+  ],
+  "risk_areas": [
+    { "description": "<concise area description>", "issue_count": <N>, "dominant_category": "<category>", "recommendation": "<specific action>" }
+  ],
+  "recommendations": ["<admin action 1>", "<admin action 2>", "<admin action 3>"]
+}`;
+
+      let aiResult = null;
+      let aiError = null;
+      try {
+        const result = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+        });
+        let raw = result.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+        raw = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        aiResult = JSON.parse(raw);
+      } catch (aiErr: any) {
+        // If Gemini fails, return stale cache if available
+        if (insightsCache) {
+          return res.json({ ...insightsCache.data, stale: true, ai_error: "AI quota exceeded — showing cached insights." });
+        }
+        aiError = aiErr.message?.includes("429") || aiErr.message?.includes("quota")
+          ? "AI quota exceeded for today. Stats shown without predictions."
+          : `AI error: ${aiErr.message}`;
+      }
+
+      const payload = { stats, ai: aiResult, generated_at: new Date().toISOString(), ai_error: aiError };
+      if (aiResult) insightsCache = { data: payload, expires_at: Date.now() + INSIGHTS_TTL_MS };
+      res.json(payload);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Vite integration
   const uploadsPath = path.join(process.cwd(), "dist", "uploads");
   if (!fs.existsSync(uploadsPath)) {

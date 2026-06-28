@@ -206,6 +206,8 @@ export default function App() {
 
   // Dashboard Stats
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [insights, setInsights] = useState<any | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
 
   // Map settings
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -268,6 +270,7 @@ export default function App() {
     fetchCurrentUser();
     fetchIssues();
     fetchStats();
+    fetchInsights();
   }, []);
 
   // Get real GPS on mount to center the map and reverse-geocode city name
@@ -338,6 +341,20 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setIssues([]);
+    }
+  };
+
+  const fetchInsights = async (forceRefresh = false) => {
+    setInsightsLoading(true);
+    try {
+      const res = await apiFetch(`/api/insights${forceRefresh ? "?refresh=1" : ""}`);
+      const data = await res.json();
+      if (data && !data.error) setInsights(data);
+    } catch (err) {
+      console.error(err);
+      setInsights({ ai: null, stats: null, ai_error: "Failed to load insights." });
+    } finally {
+      setInsightsLoading(false);
     }
   };
 
@@ -1836,7 +1853,52 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 5. How it works guide */}
+              {/* 5. AI Predictive Insights teaser card */}
+              <div className="bg-gradient-to-br from-indigo-900 to-slate-900 rounded-2xl border border-indigo-800/40 shadow-md p-5 text-white">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-300" />
+                    <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-200">AI Predictive Insights</span>
+                  </div>
+                  {insights?.ai?.health_score !== undefined && (
+                    <div className={`px-2.5 py-1 rounded-full text-[10px] font-black ${insights.ai.health_score >= 70 ? "bg-emerald-500/20 text-emerald-300" : insights.ai.health_score >= 40 ? "bg-amber-500/20 text-amber-300" : "bg-rose-500/20 text-rose-300"}`}>
+                      Health {insights.ai.health_score}/100
+                    </div>
+                  )}
+                </div>
+
+                {insightsLoading ? (
+                  <div className="flex items-center gap-2 text-indigo-300 text-xs py-2">
+                    <div className="w-4 h-4 border-2 border-indigo-400/30 border-t-indigo-400 rounded-full animate-spin" />
+                    <span>Analysing community data…</span>
+                  </div>
+                ) : insights?.ai ? (
+                  <>
+                    <p className="text-[11px] text-slate-300 leading-relaxed mb-3">{insights.ai.summary}</p>
+                    <div className="space-y-2">
+                      {(insights.ai.predictions || []).slice(0, 2).map((p: any, i: number) => (
+                        <div key={i} className="flex items-start gap-2 bg-white/5 rounded-xl px-3 py-2">
+                          <span className="text-base">{p.trend === "increasing" ? "📈" : p.trend === "decreasing" ? "📉" : "➡️"}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[10px] font-black uppercase text-indigo-300 tracking-wider">{p.category.replace("_", " ")}</span>
+                            <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">{p.forecast}</p>
+                          </div>
+                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${p.urgency === "critical" ? "bg-rose-500/30 text-rose-300" : p.urgency === "high" ? "bg-amber-500/30 text-amber-300" : "bg-slate-500/30 text-slate-300"}`}>{p.urgency}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {user?.role === "admin" && (
+                      <button onClick={() => setActiveTab("admin")} className="mt-3 text-[10px] text-indigo-300 hover:text-white font-bold underline underline-offset-2 cursor-pointer">
+                        View full insights in Admin Panel →
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[11px] text-slate-400">No insights available yet.</p>
+                )}
+              </div>
+
+              {/* 6. How it works guide */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
                 <h3 className="text-xs md:text-sm font-black text-slate-800 mb-4 flex items-center gap-2">
                   <Award className="w-4.5 h-4.5 text-indigo-600" />
@@ -2881,9 +2943,18 @@ export default function App() {
           {/* Admin Command Panel tab */}
           {activeTab === "admin" && user && user.role === "admin" && !selectedIssue && (
             <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6 space-y-6" id="view_admin_command">
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-                <h2 className="text-base font-extrabold text-slate-800">Admin Control Center</h2>
-                <p className="text-xs text-slate-400">Municipal dashboard oversight. Review all citizens reports, toggle statuses, and initiate the automated 5-step Agentic Resolution Plan pipeline.</p>
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-extrabold text-slate-800">Admin Control Center</h2>
+                  <p className="text-xs text-slate-400">Municipal dashboard oversight. Review all citizens reports, toggle statuses, and initiate the automated 5-step Agentic Resolution Plan pipeline.</p>
+                </div>
+                <button
+                  onClick={() => document.getElementById("admin-insights")?.scrollIntoView({ behavior: "smooth" })}
+                  className="shrink-0 flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  AI Insights
+                </button>
               </div>
 
               {/* Master Issue Database Grid */}
@@ -2968,6 +3039,178 @@ export default function App() {
                   </table>
                 </div>
               </div>
+
+              {/* AI Predictive Insights — full admin panel */}
+              <div id="admin-insights" className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-indigo-50 to-slate-50">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-600" />
+                    <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-widest">AI Predictive Insights</h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {insights?.generated_at && <span className="text-[9px] text-slate-400">Updated {new Date(insights.generated_at).toLocaleTimeString()}</span>}
+                    <button onClick={() => fetchInsights(true)} disabled={insightsLoading} className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 border border-indigo-200 px-2.5 py-1 rounded-lg disabled:opacity-50 cursor-pointer">
+                      {insightsLoading ? "Analysing…" : "↻ Refresh"}
+                    </button>
+                  </div>
+                </div>
+
+                {insightsLoading ? (
+                  <div className="flex items-center justify-center gap-3 py-12 text-slate-400 text-sm">
+                    <div className="w-5 h-5 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+                    <span>Generating AI predictions…</span>
+                  </div>
+                ) : insights?.stats && !insights?.ai ? (
+                  <div className="p-5 space-y-4">
+                    {insights.ai_error && (
+                      <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                        <span className="text-amber-500 shrink-0">⚠️</span>
+                        <p className="text-[11px] text-amber-700">{insights.ai_error}</p>
+                      </div>
+                    )}
+                    {insights.stats?.categoryStats && (
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Category Breakdown (stats only)</p>
+                        <div className="space-y-1.5">
+                          {insights.stats.categoryStats.filter((c: any) => c.total > 0).map((c: any) => {
+                            const pct = c.total > 0 ? Math.round((c.resolved / c.total) * 100) : 0;
+                            return (
+                              <div key={c.category} className="flex items-center gap-3">
+                                <span className="text-[10px] font-bold text-slate-600 w-24 capitalize shrink-0">{c.category.replace("_", " ")}</span>
+                                <div className="flex-1 bg-slate-100 rounded-full h-2 overflow-hidden">
+                                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${pct}%` }} />
+                                </div>
+                                <span className="text-[10px] text-slate-400 w-20 text-right shrink-0">{c.resolved}/{c.total} resolved</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : insights?.ai ? (
+                  <div className="p-5 space-y-6">
+                    {insights.ai_error && (
+                      <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                        <span className="text-amber-500 shrink-0">⚠️</span>
+                        <p className="text-[11px] text-amber-700">{insights.ai_error}</p>
+                      </div>
+                    )}
+                    {/* Health score + summary */}
+                    <div className="flex items-start gap-4">
+                      <div className={`w-16 h-16 rounded-2xl flex flex-col items-center justify-center shrink-0 ${insights.ai.health_score >= 70 ? "bg-emerald-50 border border-emerald-200" : insights.ai.health_score >= 40 ? "bg-amber-50 border border-amber-200" : "bg-rose-50 border border-rose-200"}`}>
+                        <span className={`text-xl font-black ${insights.ai.health_score >= 70 ? "text-emerald-600" : insights.ai.health_score >= 40 ? "text-amber-600" : "text-rose-600"}`}>{insights.ai.health_score}</span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">Health</span>
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-700 mb-1">Community Health Assessment</p>
+                        <p className="text-[11px] text-slate-500 leading-relaxed">{insights.ai.summary}</p>
+                      </div>
+                    </div>
+
+                    {/* Weekly trend bars */}
+                    {insights.stats?.weeklyTrend && (
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Weekly Issue Trend (last 4 weeks)</p>
+                        <div className="flex items-end gap-2 h-20">
+                          {insights.stats.weeklyTrend.map((w: any, i: number) => {
+                            const max = Math.max(...insights.stats.weeklyTrend.map((x: any) => x.total || 0), 1);
+                            const h = Math.round((w.total / max) * 100);
+                            return (
+                              <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                                <span className="text-[9px] font-bold text-slate-600">{w.total}</span>
+                                <div className="w-full bg-indigo-500 rounded-t-md transition-all" style={{ height: `${h}%`, minHeight: w.total > 0 ? "4px" : "0" }} />
+                                <span className="text-[9px] text-slate-400">{w.label}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Category stats table */}
+                    {insights.stats?.categoryStats && (
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Category Breakdown</p>
+                        <div className="space-y-1.5">
+                          {insights.stats.categoryStats.filter((c: any) => c.total > 0).map((c: any) => {
+                            const pct = Math.round((c.resolved / c.total) * 100);
+                            return (
+                              <div key={c.category} className="flex items-center gap-3">
+                                <span className="text-[10px] font-bold text-slate-600 w-24 capitalize shrink-0">{c.category.replace("_", " ")}</span>
+                                <div className="flex-1 bg-slate-100 rounded-full h-2 overflow-hidden">
+                                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${pct}%` }} />
+                                </div>
+                                <span className="text-[10px] text-slate-400 w-20 text-right shrink-0">{c.resolved}/{c.total} resolved{c.avg_resolution_days ? ` · ${c.avg_resolution_days}d avg` : ""}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Predictions */}
+                    {insights.ai.predictions?.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">30-Day Predictions</p>
+                        <div className="space-y-2">
+                          {insights.ai.predictions.map((p: any, i: number) => (
+                            <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                              <span className="text-lg">{p.trend === "increasing" ? "📈" : p.trend === "decreasing" ? "📉" : "➡️"}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                  <span className="text-[10px] font-black uppercase text-slate-700 capitalize">{p.category.replace("_", " ")}</span>
+                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${p.urgency === "critical" ? "bg-rose-100 text-rose-700" : p.urgency === "high" ? "bg-amber-100 text-amber-700" : p.urgency === "medium" ? "bg-yellow-100 text-yellow-700" : "bg-slate-100 text-slate-600"}`}>{p.urgency}</span>
+                                </div>
+                                <p className="text-[11px] text-slate-600">{p.forecast}</p>
+                                <p className="text-[10px] text-slate-400 mt-0.5">{p.reason}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Risk areas */}
+                    {insights.ai.risk_areas?.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Risk Areas</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {insights.ai.risk_areas.map((r: any, i: number) => (
+                            <div key={i} className="p-3 bg-rose-50 border border-rose-100 rounded-xl">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-rose-500 text-sm">⚠️</span>
+                                <span className="text-[10px] font-black text-rose-700 uppercase capitalize">{r.dominant_category?.replace("_", " ")}</span>
+                                <span className="ml-auto text-[9px] text-rose-500 font-bold">{r.issue_count} issues</span>
+                              </div>
+                              <p className="text-[11px] text-slate-600 mb-1">{r.description}</p>
+                              <p className="text-[10px] text-indigo-600 font-semibold">→ {r.recommendation}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Recommendations */}
+                    {insights.ai.recommendations?.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Admin Recommendations</p>
+                        <ol className="space-y-1.5">
+                          {insights.ai.recommendations.map((r: string, i: number) => (
+                            <li key={i} className="flex items-start gap-2 text-[11px] text-slate-600">
+                              <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[9px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
+                              <span>{r}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="py-10 text-center text-slate-400 text-sm">No insights available. Click Refresh to generate.</div>
+                )}
+              </div>
+
             </div>
           )}
 
