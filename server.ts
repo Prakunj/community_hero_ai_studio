@@ -1263,7 +1263,7 @@ Return ONLY a valid JSON string containing:
   app.patch("/api/issues/:id", async (req, res) => {
     const currentUser = (req as any).user;
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, resolution_note, resolution_image_url } = req.body;
 
     try {
       const authHeader = req.headers.authorization;
@@ -1284,16 +1284,16 @@ Return ONLY a valid JSON string containing:
         return res.status(403).json({ error: "Forbidden. Admin authorization required." });
       }
 
+      if (status === "resolved" && !resolution_note) {
+        return res.status(400).json({ error: "A resolution note is required when marking an issue as resolved." });
+      }
+
       const oldStatus = issue.status;
-      const updatedIssue = {
-        ...issue,
-        status,
-        updated_at: new Date().toISOString(),
-      };
+      const updateFields: any = { status, updated_at: new Date().toISOString() };
 
       const { error: updateError } = await supabase
         .from("issues")
-        .update({ status, updated_at: updatedIssue.updated_at })
+        .update(updateFields)
         .eq("id", id);
 
       if (updateError) throw updateError;
@@ -1306,13 +1306,13 @@ Return ONLY a valid JSON string containing:
           issue_id: id,
           user_id: currentUser.id,
           type: "status_changed",
-          payload: { old: oldStatus, new: status },
+          payload: { old: oldStatus, new: status, resolution_note: resolution_note || null, resolution_image_url: resolution_image_url || null },
           created_at: new Date().toISOString(),
         });
 
       if (eventError) throw eventError;
 
-      res.json({ success: true, issue: updatedIssue });
+      res.json({ success: true, issue: { ...issue, ...updateFields } });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
