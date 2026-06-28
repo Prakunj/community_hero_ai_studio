@@ -202,6 +202,7 @@ export default function App() {
   // Filters
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [issuesView, setIssuesView] = useState<"all" | "mine">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
   // Dashboard Stats
@@ -284,14 +285,16 @@ export default function App() {
         setMapZoom(13);
         try {
           const r = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?lat=${loc.lat}&lon=${loc.lng}&format=json`,
-            { headers: { "Accept-Language": "en" } }
+            `https://maps.googleapis.com/maps/api/geocode/json?latlng=${loc.lat},${loc.lng}&key=${GOOGLE_MAPS_API_KEY}&language=en&result_type=locality|sublocality`
           );
           const d = await r.json();
-          const a = d.address || {};
-          const city = a.city || a.town || a.village || a.county || a.state_district || "";
-          const state = a.state || "";
-          if (city) setFocusedCity(`${city}${state ? ", " + state : ""}`);
+          if (d.status === "OK" && d.results?.length > 0) {
+            const components = d.results[0].address_components || [];
+            const city = components.find((c: any) => c.types.includes("locality"))?.long_name
+              || components.find((c: any) => c.types.includes("sublocality"))?.long_name || "";
+            const state = components.find((c: any) => c.types.includes("administrative_area_level_1"))?.short_name || "";
+            if (city) setFocusedCity(`${city}${state ? ", " + state : ""}`);
+          }
         } catch {
           // reverse geocode failed — keep default
         }
@@ -632,7 +635,21 @@ export default function App() {
   }, [newLat, newLng, newCategory]);
 
   // Simulated location generator helper
-  // Removed useSimulatedLocation — all location is now real GPS or map pick
+  // Reverse geocode lat/lng → human-readable address via Google Maps Geocoding API
+  const reverseGeocode = async (lat: number, lng: number): Promise<string> => {
+    try {
+      const r = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}&language=en`
+      );
+      const d = await r.json();
+      if (d.status === "OK" && d.results?.length > 0) {
+        return d.results[0].formatted_address;
+      }
+      return `Near (${lat}, ${lng})`;
+    } catch {
+      return `Near (${lat}, ${lng})`;
+    }
+  };
 
   // Browser Geolocation handler with strict requirement checks
   const handleUseCurrentLocation = () => {
@@ -643,14 +660,16 @@ export default function App() {
     }
 
     navigator.geolocation.getCurrentPosition(
-      (position) => {
+      async (position) => {
         const lat = Math.round(position.coords.latitude * 100000) / 100000;
         const lng = Math.round(position.coords.longitude * 100000) / 100000;
         setNewLat(lat);
         setNewLng(lng);
-        setNewAddress(`Near GPS coordinates (${lat}, ${lng})`);
         setLocationSource("gps");
         setLocationError(null);
+        setNewAddress("Fetching address…");
+        const addr = await reverseGeocode(lat, lng);
+        setNewAddress(addr);
       },
       (error) => {
         console.warn("Geolocation failed:", error);
@@ -715,7 +734,7 @@ export default function App() {
       }
 
       // Console logging for submitted location (Audit Requirement)
-      const submittedAddress = newAddress || `Near coordinates (${newLat}, ${newLng})`;
+      const submittedAddress = newAddress && newAddress !== "Fetching address…" ? newAddress : `Near (${newLat}, ${newLng})`;
       const submittedSource = locationSource || "default_fallback";
       console.log("----------------------------------------");
       console.log("CLIENT LOCATION AUDIT - SUBMITTING ISSUE:");
@@ -762,8 +781,7 @@ export default function App() {
         // Fetch new data
         await fetchIssues();
         await fetchStats();
-        // Redirect to map to see new pin
-        setActiveTab("map");
+        setActiveTab("issues");
       }
     } catch (err: any) {
       console.error(err);
@@ -1063,26 +1081,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Location Source Status Indicator */}
-            <div className="flex items-center gap-2 pt-1">
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Verification Status:</span>
-              {locationSource === "gps" ? (
-                <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  GPS Location Active
-                </span>
-              ) : locationSource === "map_picker" ? (
-                <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                  Map Pin Active
-                </span>
-              ) : (
-                <span className="px-2.5 py-0.5 bg-rose-50 text-rose-800 border border-rose-150 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1 animate-pulse">
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                  Location Verification Required
-                </span>
-              )}
-            </div>
 
             {locationError && locationError === "__PERMISSION_DENIED__" ? (
               <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2.5">
@@ -1128,7 +1126,8 @@ export default function App() {
                             setNewLat(lat);
                             setNewLng(lng);
                             setLocationSource("map_picker");
-                            setNewAddress(`Near coordinates (${lat}, ${lng})`);
+                            setNewAddress("Fetching address…");
+                            reverseGeocode(lat, lng).then(setNewAddress);
                           }
                         }}
                       >
@@ -1146,31 +1145,37 @@ export default function App() {
               </div>
             )}
 
-            {/* Address Verification Field */}
+            {/* Address field — editable, shows pin icon + coords when location is set */}
             <div className="space-y-1 pt-1">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Street / Landmark Address</span>
-              <input
-                type="text"
-                required
-                value={newAddress}
-                onChange={(e) => setNewAddress(e.target.value)}
-                placeholder="e.g., Opposite police station, Sector 4, HSR Layout"
-                className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-indigo-500 focus:bg-white rounded-xl px-3.5 py-2.5 text-xs font-semibold focus:outline-none"
-              />
+              {newLat !== 0 && newLng !== 0 ? (
+                <div className="flex flex-col gap-1 bg-slate-50 border border-indigo-300 p-3 rounded-xl">
+                  <div className="flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    <input
+                      type="text"
+                      required
+                      value={newAddress}
+                      onChange={(e) => setNewAddress(e.target.value)}
+                      placeholder="Resolving address…"
+                      className="flex-1 bg-transparent text-xs font-bold text-slate-700 focus:outline-none min-w-0"
+                    />
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-mono">
+                    Coordinates: {newLat.toFixed(6)}, {newLng.toFixed(6)}
+                  </div>
+                </div>
+              ) : (
+                <input
+                  type="text"
+                  required
+                  value={newAddress}
+                  onChange={(e) => setNewAddress(e.target.value)}
+                  placeholder="e.g., Opposite police station, Sector 4, HSR Layout"
+                  className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-indigo-500 focus:bg-white rounded-xl px-3.5 py-2.5 text-xs font-semibold focus:outline-none"
+                />
+              )}
             </div>
-
-            {/* Small read-only text displaying exact coordinates */}
-            {newLat !== 0 && newLng !== 0 && (
-              <div className="flex flex-col gap-1 bg-slate-50 border border-slate-150 p-3 rounded-xl text-xs text-slate-500 font-medium">
-                <div className="flex items-center gap-1.5 text-slate-700">
-                  <MapPin className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                  <span className="font-bold truncate">{newAddress || "Resolving GPS coordinates..."}</span>
-                </div>
-                <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                  Coordinates: {newLat.toFixed(6)}, {newLng.toFixed(6)}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Duplicate Detection Alert */}
@@ -1296,13 +1301,14 @@ export default function App() {
 
   // Filter logic
   const filteredIssues = issues.filter((i) => {
+    const matchesOwner = !user || issuesView === "all" || i.reporter_id === user.id;
     const matchesCategory = filterCategory === "all" || i.category === filterCategory;
     const matchesStatus = filterStatus === "all" || i.status === filterStatus;
     const matchesSearch =
       i.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       i.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
       i.address.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesStatus && matchesSearch;
+    return matchesOwner && matchesCategory && matchesStatus && matchesSearch;
   });
 
 
@@ -1322,29 +1328,6 @@ export default function App() {
             <span className="text-base md:text-xl font-black tracking-tight text-slate-800">Community Hero</span>
           </div>
 
-          <div className="hidden md:flex items-center gap-1.5 bg-slate-100 px-3.5 py-1.5 rounded-full border border-slate-200 text-xs font-semibold text-slate-600">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>Focus Area:</span>
-            <select
-              value={focusedCity}
-              onChange={(e) => {
-                const city = e.target.value;
-                setFocusedCity(city);
-                if (city.includes("Bengaluru")) {
-                  panToLocation(12.9716, 77.5946, "Bengaluru");
-                } else if (city.includes("Mumbai")) {
-                  panToLocation(19.076, 72.8777, "Mumbai");
-                } else if (city.includes("Delhi")) {
-                  panToLocation(28.6139, 77.209, "Delhi");
-                }
-              }}
-              className="bg-transparent border-none font-bold text-slate-800 focus:outline-none cursor-pointer"
-            >
-              <option value="Bengaluru, KA">Bengaluru, KA</option>
-              <option value="Mumbai, MH">Mumbai, MH</option>
-              <option value="Delhi, DL">Delhi, NCR</option>
-            </select>
-          </div>
         </div>
 
         {/* User Profile Action */}
@@ -1662,12 +1645,14 @@ export default function App() {
                                 setMapCenter(loc);
                                 setMapZoom(13);
                                 try {
-                                  const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${loc.lat}&lon=${loc.lng}&format=json`, { headers: { "Accept-Language": "en" } });
+                                  const r = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${loc.lat},${loc.lng}&key=${GOOGLE_MAPS_API_KEY}&language=en&result_type=locality|sublocality`);
                                   const d = await r.json();
-                                  const a = d.address || {};
-                                  const city = a.city || a.town || a.village || a.county || a.state_district || "";
-                                  const state = a.state || "";
-                                  if (city) setFocusedCity(`${city}${state ? ", " + state : ""}`);
+                                  if (d.status === "OK" && d.results?.length > 0) {
+                                    const comps = d.results[0].address_components || [];
+                                    const city = comps.find((c: any) => c.types.includes("locality"))?.long_name || comps.find((c: any) => c.types.includes("sublocality"))?.long_name || "";
+                                    const state = comps.find((c: any) => c.types.includes("administrative_area_level_1"))?.short_name || "";
+                                    if (city) setFocusedCity(`${city}${state ? ", " + state : ""}`);
+                                  }
                                 } catch {}
                               },
                               (err) => { if (err.code === err.PERMISSION_DENIED) setLocationBlocked(true); },
@@ -1874,7 +1859,7 @@ export default function App() {
                   </div>
                 ) : insights?.ai ? (
                   <>
-                    <p className="text-[11px] text-slate-300 leading-relaxed mb-3">{insights.ai.summary}</p>
+                    <p className="text-[11px] text-slate-300 leading-relaxed mb-3">{insights.ai.narrative || insights.ai.summary}</p>
                     <div className="space-y-2">
                       {(insights.ai.predictions || []).slice(0, 2).map((p: any, i: number) => (
                         <div key={i} className="flex items-start gap-2 bg-white/5 rounded-xl px-3 py-2">
@@ -2000,8 +1985,8 @@ export default function App() {
                           setNewLat(Math.round(lat * 100000) / 100000);
                           setNewLng(Math.round(lng * 100000) / 100000);
 
-                          const address = `Near coordinates (${Math.round(lat * 100000) / 100000}, ${Math.round(lng * 100000) / 100000})`;
-                          setNewAddress(address);
+                          setNewAddress("Fetching address…");
+                          reverseGeocode(Math.round(lat * 100000) / 100000, Math.round(lng * 100000) / 100000).then(setNewAddress);
                           if (!user) { setPostLoginAction({ type: "report" }); setShowAuthModal(true); return; }
                           setActiveTab("report");
                         }
@@ -2278,7 +2263,21 @@ export default function App() {
               
               {/* Filter controls panel */}
               <div className="bg-white p-5 border-b border-slate-200 shadow-xs flex flex-wrap gap-4 items-center justify-between shrink-0" id="issues_filter_bar">
-                
+
+                {/* All / Mine toggle */}
+                {user && (
+                  <div className="flex items-center bg-slate-100 rounded-xl p-1 shrink-0">
+                    <button
+                      onClick={() => setIssuesView("all")}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${issuesView === "all" ? "bg-white text-indigo-700 shadow-xs" : "text-slate-500"}`}
+                    >All</button>
+                    <button
+                      onClick={() => setIssuesView("mine")}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${issuesView === "mine" ? "bg-white text-indigo-700 shadow-xs" : "text-slate-500"}`}
+                    >My Issues</button>
+                  </div>
+                )}
+
                 {/* Search field */}
                 <div className="relative w-full max-w-sm">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -2301,7 +2300,7 @@ export default function App() {
                       onChange={(e) => setFilterCategory(e.target.value)}
                       className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-xl px-2.5 py-1.5 text-slate-700"
                     >
-                      <option value="all">All Categories</option>
+                      <option value="all">All</option>
                       <option value="pothole">Pothole</option>
                       <option value="garbage">Garbage</option>
                       <option value="water_leakage">Water Leakage</option>
@@ -2318,7 +2317,7 @@ export default function App() {
                       onChange={(e) => setFilterStatus(e.target.value)}
                       className="bg-slate-50 border border-slate-200 text-xs font-bold rounded-xl px-2.5 py-1.5 text-slate-700"
                     >
-                      <option value="all">All Statuses</option>
+                      <option value="all">All</option>
                       <option value="reported">Reported</option>
                       <option value="verified">Verified</option>
                       <option value="in_progress">In Progress</option>
@@ -3096,31 +3095,32 @@ export default function App() {
                         <p className="text-[11px] text-amber-700">{insights.ai_error}</p>
                       </div>
                     )}
-                    {/* Health score + summary */}
-                    <div className="flex items-start gap-4">
+                    {/* Health score + narrative */}
+                    <div className="flex items-start gap-4 pb-5 border-b border-slate-100">
                       <div className={`w-16 h-16 rounded-2xl flex flex-col items-center justify-center shrink-0 ${insights.ai.health_score >= 70 ? "bg-emerald-50 border border-emerald-200" : insights.ai.health_score >= 40 ? "bg-amber-50 border border-amber-200" : "bg-rose-50 border border-rose-200"}`}>
                         <span className={`text-xl font-black ${insights.ai.health_score >= 70 ? "text-emerald-600" : insights.ai.health_score >= 40 ? "text-amber-600" : "text-rose-600"}`}>{insights.ai.health_score}</span>
-                        <span className="text-[9px] font-bold text-slate-400 uppercase">Health</span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">/ 100</span>
                       </div>
-                      <div>
-                        <p className="text-xs font-bold text-slate-700 mb-1">Community Health Assessment</p>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">{insights.ai.summary}</p>
+                      <div className="flex-1">
+                        <p className="text-xs font-extrabold text-slate-700 mb-1.5">Analyst Summary</p>
+                        <p className="text-[12px] text-slate-600 leading-relaxed">{insights.ai.narrative || insights.ai.summary}</p>
                       </div>
                     </div>
 
                     {/* Weekly trend bars */}
                     {insights.stats?.weeklyTrend && (
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Weekly Issue Trend (last 4 weeks)</p>
-                        <div className="flex items-end gap-2 h-20">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-3">Issue Volume — Last 4 Weeks</p>
+                        <div className="flex items-end gap-3 h-20">
                           {insights.stats.weeklyTrend.map((w: any, i: number) => {
                             const max = Math.max(...insights.stats.weeklyTrend.map((x: any) => x.total || 0), 1);
                             const h = Math.round((w.total / max) * 100);
+                            const isLatest = i === insights.stats.weeklyTrend.length - 1;
                             return (
                               <div key={i} className="flex-1 flex flex-col items-center gap-1">
                                 <span className="text-[9px] font-bold text-slate-600">{w.total}</span>
-                                <div className="w-full bg-indigo-500 rounded-t-md transition-all" style={{ height: `${h}%`, minHeight: w.total > 0 ? "4px" : "0" }} />
-                                <span className="text-[9px] text-slate-400">{w.label}</span>
+                                <div className={`w-full rounded-t-md transition-all ${isLatest ? "bg-indigo-600" : "bg-indigo-200"}`} style={{ height: `${h}%`, minHeight: w.total > 0 ? "4px" : "0" }} />
+                                <span className="text-[9px] text-slate-400">Week {i + 1}</span>
                               </div>
                             );
                           })}
@@ -3128,20 +3128,20 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Category stats table */}
+                    {/* Category breakdown */}
                     {insights.stats?.categoryStats && (
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Category Breakdown</p>
-                        <div className="space-y-1.5">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-3">Resolution Progress by Category</p>
+                        <div className="space-y-2">
                           {insights.stats.categoryStats.filter((c: any) => c.total > 0).map((c: any) => {
                             const pct = Math.round((c.resolved / c.total) * 100);
                             return (
                               <div key={c.category} className="flex items-center gap-3">
-                                <span className="text-[10px] font-bold text-slate-600 w-24 capitalize shrink-0">{c.category.replace("_", " ")}</span>
+                                <span className="text-[10px] font-bold text-slate-600 w-24 capitalize shrink-0">{c.category.replace(/_/g, " ")}</span>
                                 <div className="flex-1 bg-slate-100 rounded-full h-2 overflow-hidden">
-                                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${pct}%` }} />
+                                  <div className={`h-full rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 50 ? "bg-indigo-500" : "bg-rose-400"}`} style={{ width: `${pct}%` }} />
                                 </div>
-                                <span className="text-[10px] text-slate-400 w-20 text-right shrink-0">{c.resolved}/{c.total} resolved{c.avg_resolution_days ? ` · ${c.avg_resolution_days}d avg` : ""}</span>
+                                <span className="text-[10px] text-slate-400 w-24 text-right shrink-0">{c.resolved}/{c.total} resolved{c.avg_resolution_days ? ` · ${c.avg_resolution_days}d avg` : ""}</span>
                               </div>
                             );
                           })}
@@ -3150,21 +3150,24 @@ export default function App() {
                     )}
 
                     {/* Predictions */}
-                    {insights.ai.predictions?.length > 0 && (
+                    {insights.ai.predictions?.filter((p: any) => p.urgency !== "low" || p.trend !== "stable").length > 0 && (
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">30-Day Predictions</p>
-                        <div className="space-y-2">
-                          {insights.ai.predictions.map((p: any, i: number) => (
-                            <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
-                              <span className="text-lg">{p.trend === "increasing" ? "📈" : p.trend === "decreasing" ? "📉" : "➡️"}</span>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-0.5">
-                                  <span className="text-[10px] font-black uppercase text-slate-700 capitalize">{p.category.replace("_", " ")}</span>
-                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${p.urgency === "critical" ? "bg-rose-100 text-rose-700" : p.urgency === "high" ? "bg-amber-100 text-amber-700" : p.urgency === "medium" ? "bg-yellow-100 text-yellow-700" : "bg-slate-100 text-slate-600"}`}>{p.urgency}</span>
-                                </div>
-                                <p className="text-[11px] text-slate-600">{p.forecast}</p>
-                                <p className="text-[10px] text-slate-400 mt-0.5">{p.reason}</p>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-3">30-Day Outlook</p>
+                        <div className="space-y-3">
+                          {insights.ai.predictions.filter((p: any) => p.trend !== "stable" || p.urgency === "high" || p.urgency === "critical").map((p: any, i: number) => (
+                            <div key={i} className={`rounded-xl border p-4 ${p.urgency === "critical" ? "bg-rose-50 border-rose-200" : p.urgency === "high" ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className="text-base">{p.trend === "increasing" ? "📈" : p.trend === "decreasing" ? "📉" : "➡️"}</span>
+                                <span className="text-[11px] font-extrabold text-slate-800">{p.headline || p.category.replace(/_/g, " ")}</span>
+                                <span className={`ml-auto text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${p.urgency === "critical" ? "bg-rose-200 text-rose-800" : p.urgency === "high" ? "bg-amber-200 text-amber-800" : "bg-slate-200 text-slate-600"}`}>{p.urgency}</span>
                               </div>
+                              <p className="text-[11px] text-slate-600 leading-relaxed mb-2">{p.explanation || p.forecast}</p>
+                              {(p.suggested_action || p.reason) && (
+                                <div className="flex items-start gap-1.5 pt-2 border-t border-slate-200/70">
+                                  <span className="text-indigo-500 text-xs shrink-0">→</span>
+                                  <p className="text-[11px] text-indigo-700 font-semibold">{p.suggested_action || p.reason}</p>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -3174,35 +3177,39 @@ export default function App() {
                     {/* Risk areas */}
                     {insights.ai.risk_areas?.length > 0 && (
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Risk Areas</p>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-3">Areas Requiring Attention</p>
+                        <div className="space-y-2">
                           {insights.ai.risk_areas.map((r: any, i: number) => (
-                            <div key={i} className="p-3 bg-rose-50 border border-rose-100 rounded-xl">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-rose-500 text-sm">⚠️</span>
-                                <span className="text-[10px] font-black text-rose-700 uppercase capitalize">{r.dominant_category?.replace("_", " ")}</span>
-                                <span className="ml-auto text-[9px] text-rose-500 font-bold">{r.issue_count} issues</span>
+                            <div key={i} className="p-4 bg-white border border-slate-200 rounded-xl">
+                              <div className="flex items-start justify-between gap-2 mb-1.5">
+                                <span className="text-[11px] font-extrabold text-slate-800">{r.area_label || r.description}</span>
+                                <span className="text-[9px] font-bold bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full shrink-0">{r.issue_count} issues</span>
                               </div>
-                              <p className="text-[11px] text-slate-600 mb-1">{r.description}</p>
-                              <p className="text-[10px] text-indigo-600 font-semibold">→ {r.recommendation}</p>
+                              <p className="text-[11px] text-slate-500 leading-relaxed mb-2">{r.risk_narrative || r.description}</p>
+                              <div className="flex items-start gap-1.5 pt-2 border-t border-slate-100">
+                                <span className="text-indigo-500 text-xs shrink-0">→</span>
+                                <p className="text-[11px] text-indigo-700 font-semibold">{r.recommended_action || r.recommendation}</p>
+                              </div>
                             </div>
                           ))}
                         </div>
                       </div>
                     )}
 
-                    {/* Recommendations */}
-                    {insights.ai.recommendations?.length > 0 && (
+                    {/* Key actions */}
+                    {(insights.ai.key_actions || insights.ai.recommendations)?.length > 0 && (
                       <div>
-                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Admin Recommendations</p>
-                        <ol className="space-y-1.5">
-                          {insights.ai.recommendations.map((r: string, i: number) => (
-                            <li key={i} className="flex items-start gap-2 text-[11px] text-slate-600">
-                              <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[9px] font-black flex items-center justify-center shrink-0 mt-0.5">{i + 1}</span>
-                              <span>{r}</span>
-                            </li>
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-3">Action Plan</p>
+                        <div className="space-y-2">
+                          {(insights.ai.key_actions || insights.ai.recommendations.map((r: string) => ({ priority: "this_week", action: r }))).map((a: any, i: number) => (
+                            <div key={i} className="flex items-start gap-3 p-3 bg-indigo-50 border border-indigo-100 rounded-xl">
+                              <span className={`text-[9px] font-black px-2 py-1 rounded-lg shrink-0 mt-0.5 ${a.priority === "immediate" ? "bg-rose-100 text-rose-700" : a.priority === "this_week" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+                                {a.priority === "immediate" ? "NOW" : a.priority === "this_week" ? "THIS WEEK" : "THIS MONTH"}
+                              </span>
+                              <p className="text-[11px] text-slate-700 font-medium leading-relaxed">{a.action}</p>
+                            </div>
                           ))}
-                        </ol>
+                        </div>
                       </div>
                     )}
                   </div>

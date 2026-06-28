@@ -2013,22 +2013,37 @@ Address: "${issue.address}"`;
 
       if (!ai) return res.status(503).json({ error: "AI not configured" });
 
-      const prompt = `You are an urban analytics AI for a civic issue reporting platform in India. Analyze the data below and return ONLY valid JSON with predictions.
+      const prompt = `You are a senior urban analytics advisor for a civic issue tracking platform in India. Write like a trusted analyst briefing a municipal commissioner — clear, professional, evidence-backed. No jargon, no raw data dumps.
 
 Data:
 ${JSON.stringify(stats)}
 
-Return exactly this JSON structure (no markdown, no extra text):
+Return ONLY valid JSON (no markdown, no extra text) with this exact structure:
 {
-  "health_score": <integer 0-100, higher = better community health>,
-  "summary": "<2 sentences summarising trends and outlook>",
+  "health_score": <integer 0-100, higher = healthier community>,
+  "narrative": "<3-4 sentence executive summary written in plain English. Cite specific numbers naturally in prose — e.g. 'Six of the eight reported issues are potholes, and five remain unresolved.' Do NOT use field names like 'W4' or 'category'. Write as if briefing a non-technical official.>",
   "predictions": [
-    { "category": "<category>", "trend": "increasing|stable|decreasing", "urgency": "low|medium|high|critical", "forecast": "<one sentence prediction for next 30 days>", "reason": "<data-driven reason>" }
+    {
+      "category": "<category name>",
+      "trend": "increasing|stable|decreasing",
+      "urgency": "low|medium|high|critical",
+      "headline": "<8-10 word headline for this prediction, e.g. 'Pothole complaints expected to rise sharply this month'>",
+      "explanation": "<2-3 sentence human-readable explanation. Start with 'Based on...' or 'Our analysis shows...'. Cite evidence naturally, e.g. 'Based on 6 new reports in the past week with only 1 resolved, road damage is accumulating faster than it is being addressed.' Never expose raw field names.>",
+      "suggested_action": "<One concrete action the admin should take, written as a direct instruction e.g. 'Deploy road repair crews to the northern cluster within 48 hours.'>"
+    }
   ],
   "risk_areas": [
-    { "description": "<concise area description>", "issue_count": <N>, "dominant_category": "<category>", "recommendation": "<specific action>" }
+    {
+      "area_label": "<Human-readable area name e.g. 'Northern residential zone' or 'Sector 4 junction area'>",
+      "issue_count": <N>,
+      "dominant_category": "<category>",
+      "risk_narrative": "<1-2 sentences explaining why this area is at risk in plain language>",
+      "recommended_action": "<Direct instruction for admin>"
+    }
   ],
-  "recommendations": ["<admin action 1>", "<admin action 2>", "<admin action 3>"]
+  "key_actions": [
+    { "priority": "immediate|this_week|this_month", "action": "<Direct, specific admin action in plain language>" }
+  ]
 }`;
 
       let aiResult = null;
