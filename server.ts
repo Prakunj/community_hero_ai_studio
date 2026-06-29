@@ -1684,22 +1684,46 @@ Return ONLY a valid JSON string containing:
 
       // Category base risk (public health / safety impact)
       const CATEGORY_RISK: Record<string, number> = {
-        water_leakage: 20,  // infrastructure damage + public health
-        drain: 18,           // flooding + sanitation
-        pothole: 15,         // road safety / accidents
-        garbage: 12,         // public health
-        streetlight: 10,     // night-time safety
+        water_leakage: 20,
+        drain: 18,
+        pothole: 15,
+        garbage: 12,
+        streetlight: 10,
         other: 5,
       };
       const categoryRisk = CATEGORY_RISK[issue.category] ?? 5;
 
+      // Proximity risk — check for schools/hospitals within 500m via Google Places API
+      let proximityBonus = 0;
+      const proximitySources: string[] = [];
+      const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+      if (issue.lat && issue.lng && mapsKey) {
+        try {
+          const placesBase = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${issue.lat},${issue.lng}&radius=500&key=${mapsKey}`;
+          const [schoolRes, hospitalRes] = await Promise.all([
+            fetch(`${placesBase}&type=school`, { signal: AbortSignal.timeout(6000) }),
+            fetch(`${placesBase}&type=hospital`, { signal: AbortSignal.timeout(6000) }),
+          ]);
+          if (schoolRes.ok) {
+            const sd = await schoolRes.json();
+            if (sd.results?.length > 0) { proximityBonus += 15; proximitySources.push("school"); }
+          }
+          if (hospitalRes.ok) {
+            const hd = await hospitalRes.json();
+            if (hd.results?.length > 0) { proximityBonus += 20; proximitySources.push("hospital"); }
+          }
+        } catch {
+          // Places API unavailable — skip proximity factor silently
+        }
+      }
+
       // Urgency Score logic
       const urgencyScore = Math.min(
         100,
-        Math.round((verificationsCount * 5) + (daysOpen * 2) + (historyDensity * 4) + (issue.image_url ? 10 : 0) + categoryRisk)
+        Math.round((verificationsCount * 5) + (daysOpen * 2) + (historyDensity * 4) + (issue.image_url ? 10 : 0) + categoryRisk + proximityBonus)
       );
 
-      const step3Input = { verifications: verificationsCount, days_open: daysOpen, nearby_trend_density: historyDensity, category: issue.category };
+      const step3Input = { verifications: verificationsCount, days_open: daysOpen, nearby_trend_density: historyDensity, category: issue.category, proximity_facilities: proximitySources };
       const step3Output = {
         calculated_urgency_score: urgencyScore,
         factors: {
@@ -1708,6 +1732,8 @@ Return ONLY a valid JSON string containing:
           days_open_weight: daysOpen * 2,
           area_trend_weight: historyDensity * 4,
           media_attachment_bonus: issue.image_url ? 10 : 0,
+          proximity_bonus: proximityBonus,
+          proximity_facilities: proximitySources,
         },
         status: urgencyScore > 50 ? "Urgent Priority Action Advised" : "Standard Priority Track",
       };
