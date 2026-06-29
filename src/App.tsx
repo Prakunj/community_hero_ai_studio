@@ -1884,54 +1884,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 5. Action Center teaser */}
-              {(() => {
-                const weekAgo = Date.now() - 7 * 86400000;
-                const active = issues.filter(i => i.status !== "resolved" && i.status !== "rejected");
-                const slaCount = active.filter(i => isSlaBreached(i)).length;
-                const stuckCount = active.filter(i => i.status === "verified" && getDaysOpen(i) >= 3).length;
-                const unactionedCount = active.filter(i => i.status === "reported" && getDaysOpen(i) >= 5).length;
-                const mediaCount = issues.filter(i => i.moderation_status === "flagged" || i.moderation_status === "needs_review").length;
-                const newThisWeek = issues.filter(i => new Date(i.created_at).getTime() >= weekAgo).length;
-                const resolvedThisWeek = issues.filter(i => i.status === "resolved" && new Date(i.updated_at).getTime() >= weekAgo).length;
-                const totalUrgent = slaCount + stuckCount + unactionedCount + mediaCount;
-                return (
-                  <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl border border-slate-700/40 shadow-md p-5 text-white">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle className="w-4 h-4 text-rose-400" />
-                        <span className="text-xs font-extrabold uppercase tracking-wider text-slate-200">Action Center</span>
-                      </div>
-                      {totalUrgent > 0 ? (
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300">{totalUrgent} items need attention</span>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300">All clear</span>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 mb-3">
-                      {[
-                        { label: "SLA breached", count: slaCount, color: "text-rose-300" },
-                        { label: "Stuck verified", count: stuckCount, color: "text-amber-300" },
-                        { label: "Ignored 5+ days", count: unactionedCount, color: "text-orange-300" },
-                        { label: "Media to review", count: mediaCount, color: "text-violet-300" },
-                      ].map(({ label, count, color }) => (
-                        <div key={label} className="bg-white/5 rounded-xl px-3 py-2">
-                          <p className={`text-base font-black ${count > 0 ? color : "text-slate-500"}`}>{count}</p>
-                          <p className="text-[9px] text-slate-400 font-medium">{label}</p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 border-t border-white/10 pt-2.5">
-                      <span>{newThisWeek} new this week · {resolvedThisWeek} resolved</span>
-                      {user?.role === "admin" && (
-                        <button onClick={() => { setActiveTab("admin"); setTimeout(() => document.getElementById("admin-insights")?.scrollIntoView({ behavior: "smooth" }), 100); }} className="text-indigo-300 hover:text-white font-bold cursor-pointer">
-                          View full breakdown →
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
+
 
               {/* 6. How it works guide */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">

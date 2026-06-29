@@ -1682,16 +1682,28 @@ Return ONLY a valid JSON string containing:
       const verificationsCount = issue.verification_count || 0;
       const historyDensity = nearbyHistoric.length;
 
+      // Category base risk (public health / safety impact)
+      const CATEGORY_RISK: Record<string, number> = {
+        water_leakage: 20,  // infrastructure damage + public health
+        drain: 18,           // flooding + sanitation
+        pothole: 15,         // road safety / accidents
+        garbage: 12,         // public health
+        streetlight: 10,     // night-time safety
+        other: 5,
+      };
+      const categoryRisk = CATEGORY_RISK[issue.category] ?? 5;
+
       // Urgency Score logic
       const urgencyScore = Math.min(
         100,
-        Math.round((verificationsCount * 5) + (daysOpen * 2) + (historyDensity * 4) + (issue.image_url ? 10 : 0))
+        Math.round((verificationsCount * 5) + (daysOpen * 2) + (historyDensity * 4) + (issue.image_url ? 10 : 0) + categoryRisk)
       );
 
-      const step3Input = { verifications: verificationsCount, days_open: daysOpen, nearby_trend_density: historyDensity };
+      const step3Input = { verifications: verificationsCount, days_open: daysOpen, nearby_trend_density: historyDensity, category: issue.category };
       const step3Output = {
         calculated_urgency_score: urgencyScore,
         factors: {
+          category_risk: categoryRisk,
           verification_weight: verificationsCount * 5,
           days_open_weight: daysOpen * 2,
           area_trend_weight: historyDensity * 4,
