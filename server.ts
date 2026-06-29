@@ -50,6 +50,8 @@ export interface Issue {
   ai_confidence?: number;
   ai_raw?: string;
   duplicate_of?: string | null;
+  moderation_status?: string;
+  moderation_result?: any;
   agent_analysis?: {
     steps: {
       step: string;
@@ -449,9 +451,13 @@ CREATE TABLE IF NOT EXISTS issues (
   ai_raw TEXT,
   duplicate_of TEXT REFERENCES issues(id) ON DELETE SET NULL,
   agent_analysis JSONB,
+  moderation_status TEXT NOT NULL DEFAULT 'pending',
+  moderation_result JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS moderation_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS moderation_result JSONB;
 
 -- Create verifications table
 CREATE TABLE IF NOT EXISTS verifications (
@@ -681,6 +687,92 @@ function getDistanceMeters(lat1: number, lng1: number, lat2: number, lng2: numbe
       Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+}
+
+// Async media moderation via Gemini Vision
+async function moderateMedia(issueId: string, mediaUrl: string, mediaType: "image" | "video") {
+  const supabase = getSupabase();
+  try {
+    let moderationStatus: string;
+    let moderationResult: any;
+
+    if (mediaType === "video") {
+      // Videos can't be vision-analyzed inline — flag for admin manual review
+      moderationStatus = "needs_review";
+      moderationResult = { reason: "Video content requires manual admin review.", auto: false };
+    } else if (!ai) {
+      // No Gemini key — auto-approve (don't block submissions)
+      moderationStatus = "approved";
+      moderationResult = { reason: "Gemini not configured, auto-approved.", auto: true };
+    } else {
+      // Fetch image as base64 for Gemini Vision
+      const imageRes = await fetch(mediaUrl);
+      if (!imageRes.ok) throw new Error("Failed to fetch image for moderation");
+      const buffer = Buffer.from(await imageRes.arrayBuffer());
+      const base64 = buffer.toString("base64");
+      const mimeType = imageRes.headers.get("content-type") || "image/jpeg";
+
+      const prompt = `You are a content moderation AI. Analyze this image uploaded by a citizen for a civic issue reporting platform.
+
+Determine if it is SAFE or UNSAFE for public display.
+
+UNSAFE criteria (flag any of these):
+- Explicit sexual content or nudity
+- Graphic violence, gore, or severe injury
+- Hate symbols or discriminatory imagery
+- Personal identification documents (Aadhaar, passport, etc.)
+- Clearly unrelated non-civic content (memes, screenshots, personal selfies)
+
+SAFE criteria:
+- Roads, potholes, infrastructure damage
+- Garbage, drainage, water leakage
+- Street lights, signage, public property
+- General outdoor civic environment photos
+
+Return ONLY valid JSON:
+{
+  "safe": true|false,
+  "confidence": 0.0-1.0,
+  "reason": "<one sentence explanation>",
+  "flags": ["list", "of", "concerns"] // empty array if safe
+}`;
+
+      const aiResponse = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: {
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType, data: base64 } }
+          ]
+        } as any,
+        config: { responseMimeType: "application/json" },
+      });
+
+      const result = JSON.parse(aiResponse.text?.trim() || "{}");
+      moderationStatus = result.safe === false ? "flagged" : "approved";
+      moderationResult = result;
+    }
+
+    await supabase.from("issues").update({
+      moderation_status: moderationStatus,
+      moderation_result: moderationResult,
+      updated_at: new Date().toISOString(),
+    }).eq("id", issueId);
+
+    console.log(`[Moderation] Issue ${issueId}: ${moderationStatus}`);
+  } catch (err: any) {
+    console.error(`[Moderation] Failed for issue ${issueId}:`, err.message);
+    const isQuota = err.message?.includes("429") || err.message?.includes("quota") || err.message?.includes("RESOURCE_EXHAUSTED");
+    // Never auto-approve on error — send to admin review queue
+    await supabase.from("issues").update({
+      moderation_status: "needs_review",
+      moderation_result: {
+        reason: isQuota ? "AI quota exceeded — manual admin review required." : "Moderation check failed — manual admin review required.",
+        error: err.message,
+      },
+      updated_at: new Date().toISOString(),
+    }).eq("id", issueId);
+  }
 }
 
 // Start Server Setup
@@ -1229,6 +1321,8 @@ Return ONLY a valid JSON string containing:
         ai_raw: JSON.stringify(aiRaw),
         duplicate_of: isDuplicateOf,
         agent_analysis: null,
+        moderation_status: image_url ? "pending" : "approved",
+        moderation_result: null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
@@ -1254,6 +1348,11 @@ Return ONLY a valid JSON string containing:
       if (insertEventError) throw insertEventError;
 
       res.json({ success: true, issue: newIssue });
+
+      // Fire-and-forget async media moderation after responding
+      if (image_url) {
+        setImmediate(() => moderateMedia(issueId, image_url, media_type === "video" ? "video" : "image"));
+      }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1313,6 +1412,37 @@ Return ONLY a valid JSON string containing:
       if (eventError) throw eventError;
 
       res.json({ success: true, issue: { ...issue, ...updateFields } });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 4a. PATCH /api/issues/[id]/moderation — admin approve or reject media
+  app.patch("/api/issues/:id/moderation", async (req, res) => {
+    const currentUser = (req as any).user;
+    const { id } = req.params;
+    const { action } = req.body; // "approve" | "reject"
+
+    if (!currentUser || currentUser.role !== "admin") {
+      return res.status(403).json({ error: "Admin only." });
+    }
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({ error: "action must be 'approve' or 'reject'." });
+    }
+
+    try {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : undefined;
+      const supabase = getSupabase(token);
+
+      const newStatus = action === "approve" ? "approved" : "rejected_media";
+      const { error } = await supabase.from("issues").update({
+        moderation_status: newStatus,
+        updated_at: new Date().toISOString(),
+      }).eq("id", id);
+
+      if (error) throw error;
+      res.json({ success: true, moderation_status: newStatus });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

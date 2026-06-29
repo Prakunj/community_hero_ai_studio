@@ -354,6 +354,10 @@ export default function App() {
       const data = await response.json();
       if (Array.isArray(data)) {
         setIssues(data);
+        // If any media is still pending moderation, poll again in 5s
+        if (data.some((i: Issue) => i.moderation_status === "pending")) {
+          setTimeout(fetchIssues, 5000);
+        }
       } else {
         console.error("Issues API response is not an array:", data);
         setIssues([]);
@@ -805,6 +809,7 @@ export default function App() {
         await fetchIssues();
         await fetchStats();
         setActiveTab("issues");
+
       }
     } catch (err: any) {
       console.error(err);
@@ -1271,6 +1276,24 @@ export default function App() {
   };
 
   // Categories helper
+  const isMediaVisible = (issue: Issue) => {
+    if (!issue.image_url) return true;
+    // Hide only confirmed unsafe/flagged media
+    return issue.moderation_status !== "flagged" &&
+           issue.moderation_status !== "needs_review" &&
+           issue.moderation_status !== "rejected_media";
+  };
+
+  const getModerationBadge = (status: Issue["moderation_status"]) => {
+    switch (status) {
+      case "pending": return { label: "AI safety check in progress…", color: "bg-amber-50 text-amber-600 border-amber-200" };
+      case "flagged": return { label: "Media flagged by AI", color: "bg-rose-100 text-rose-700 border-rose-200" };
+      case "needs_review": return { label: "Media needs admin review", color: "bg-orange-100 text-orange-700 border-orange-200" };
+      case "rejected_media": return { label: "Media rejected", color: "bg-slate-100 text-slate-500 border-slate-200" };
+      default: return null;
+    }
+  };
+
   const getCategoryColor = (category: string) => {
     switch (category) {
       case "pothole":
@@ -2370,12 +2393,25 @@ export default function App() {
                       >
                         {/* Card Image element */}
                         <div className="h-44 w-full bg-slate-100 relative shrink-0">
-                          {issue.image_url ? (
-                            <img
-                              src={issue.image_url}
-                              alt={issue.title}
-                              className="w-full h-full object-cover"
-                            />
+                          {issue.image_url && isMediaVisible(issue) ? (
+                            <>
+                              <img
+                                src={issue.image_url}
+                                alt={issue.title}
+                                className="w-full h-full object-cover"
+                              />
+                              {issue.moderation_status === "pending" && (
+                                <div className="absolute bottom-0 inset-x-0 bg-black/50 backdrop-blur-xs flex items-center gap-1.5 px-3 py-1.5">
+                                  <div className="w-2.5 h-2.5 border-2 border-amber-300 border-t-transparent rounded-full animate-spin shrink-0" />
+                                  <span className="text-[10px] font-bold text-amber-200">AI safety check in progress…</span>
+                                </div>
+                              )}
+                            </>
+                          ) : issue.image_url && !isMediaVisible(issue) ? (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 bg-slate-50">
+                              <Shield className="w-8 h-8 mb-2 text-rose-400" />
+                              <span className="text-[10px] font-bold text-slate-500">Media flagged — under review</span>
+                            </div>
                           ) : (
                             <div className="w-full h-full flex flex-col items-center justify-center text-slate-300">
                               <ImageIcon className="w-10 h-10 mb-2" />
@@ -2974,6 +3010,7 @@ export default function App() {
                 <div>
                   <h2 className="text-base font-extrabold text-slate-800">Admin Control Center</h2>
                   <p className="text-xs text-slate-400">Municipal dashboard oversight. Review all citizens reports, toggle statuses, and initiate the automated 5-step Agentic Resolution Plan pipeline.</p>
+                  {(() => { const flagged = issues.filter(i => i.moderation_status === "flagged" || i.moderation_status === "needs_review").length; return flagged > 0 ? <div className="mt-2 flex items-center gap-2 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg w-fit"><Shield className="w-3.5 h-3.5" />{flagged} media item{flagged > 1 ? "s" : ""} awaiting moderation review</div> : null; })()}
                 </div>
                 <button
                   onClick={() => document.getElementById("admin-insights")?.scrollIntoView({ behavior: "smooth" })}
@@ -3354,20 +3391,40 @@ export default function App() {
 
                   {/* Main media container */}
                   <div className="rounded-xl overflow-hidden bg-slate-100 border border-slate-200 relative max-h-[380px] flex justify-center items-center">
-                    {selectedIssue.image_url ? (
-                      selectedIssue.media_type === "video" ? (
-                        <video
-                          src={selectedIssue.image_url}
-                          controls
-                          className="w-full max-h-[380px] object-contain bg-slate-950"
-                        />
-                      ) : (
-                        <img
-                          src={selectedIssue.image_url}
-                          alt={selectedIssue.title}
-                          className="w-full h-full object-cover max-h-[380px]"
-                        />
-                      )
+                    {selectedIssue.image_url && (isMediaVisible(selectedIssue) || user?.role === "admin") ? (
+                      <>
+                        {selectedIssue.media_type === "video" ? (
+                          <video
+                            src={selectedIssue.image_url}
+                            controls
+                            className="w-full max-h-[380px] object-contain bg-slate-950"
+                          />
+                        ) : (
+                          <img
+                            src={selectedIssue.image_url}
+                            alt={selectedIssue.title}
+                            className="w-full h-full object-cover max-h-[380px]"
+                          />
+                        )}
+                        {selectedIssue.moderation_status === "pending" && (
+                          <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-xs flex items-center gap-2 px-4 py-2">
+                            <div className="w-3 h-3 border-2 border-amber-300 border-t-transparent rounded-full animate-spin shrink-0" />
+                            <p className="text-[11px] font-bold text-amber-200">AI safety check in progress — media visible pending review</p>
+                          </div>
+                        )}
+                        {!isMediaVisible(selectedIssue) && user?.role === "admin" && (
+                          <div className="absolute bottom-0 inset-x-0 bg-black/60 backdrop-blur-xs flex items-center gap-2 px-4 py-2">
+                            <Shield className="w-3.5 h-3.5 text-rose-300 shrink-0" />
+                            <p className="text-[11px] font-bold text-rose-200">Hidden from public — admin view only</p>
+                          </div>
+                        )}
+                      </>
+                    ) : selectedIssue.image_url && !isMediaVisible(selectedIssue) ? (
+                      <div className="py-16 text-center px-6">
+                        <Shield className="w-12 h-12 mx-auto mb-3 text-rose-400" />
+                        <p className="text-sm font-bold text-slate-600">Media Flagged</p>
+                        <p className="text-xs text-slate-400 mt-1">This media was flagged as unsafe and is hidden from public view.</p>
+                      </div>
                     ) : (
                       <div className="py-20 text-center text-slate-300">
                         <ImageIcon className="w-12 h-12 mx-auto mb-2" />
@@ -3375,6 +3432,51 @@ export default function App() {
                       </div>
                     )}
                   </div>
+
+                  {/* Moderation status banner + admin controls */}
+                  {selectedIssue.image_url && (() => {
+                    const badge = getModerationBadge(selectedIssue.moderation_status);
+                    const isAdmin = user?.role === "admin";
+                    // Only show when AI raised a concern
+                    if (!badge) return null;
+                    const bannerColor = badge.color;
+                    const bannerLabel = badge.label;
+                    return (
+                      <div className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl border ${bannerColor}`}>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Shield className="w-4 h-4 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-bold">{bannerLabel}</p>
+                            {selectedIssue.moderation_result?.reason && (
+                              <p className="text-[10px] opacity-70 mt-0.5 truncate">{selectedIssue.moderation_result.reason}</p>
+                            )}
+                          </div>
+                        </div>
+                        {isAdmin && (selectedIssue.moderation_status === "flagged" || selectedIssue.moderation_status === "needs_review" || selectedIssue.moderation_status === "rejected_media") && (
+                          <div className="flex gap-2 shrink-0">
+                            <button
+                              onClick={async () => {
+                                await apiFetch(`/api/issues/${selectedIssue.id}/moderation`, { method: "PATCH", body: JSON.stringify({ action: "approve" }) });
+                                selectIssueDetail(selectedIssue.id, referrerTab);
+                                fetchIssues();
+                              }}
+                              className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold"
+                            >Approve</button>
+                            {selectedIssue.moderation_status !== "rejected_media" && (
+                              <button
+                                onClick={async () => {
+                                  await apiFetch(`/api/issues/${selectedIssue.id}/moderation`, { method: "PATCH", body: JSON.stringify({ action: "reject" }) });
+                                  selectIssueDetail(selectedIssue.id, referrerTab);
+                                  fetchIssues();
+                                }}
+                                className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-bold"
+                              >Reject Media</button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   <div>
                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1.5">Description Detail</h4>

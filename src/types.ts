@@ -23,6 +23,8 @@ export interface Issue {
   ai_confidence?: number;
   ai_raw?: string;
   duplicate_of?: string | null;
+  moderation_status?: "pending" | "approved" | "flagged" | "needs_review" | "rejected_media" | null;
+  moderation_result?: any;
   agent_analysis?: {
     steps: {
       step: string;
