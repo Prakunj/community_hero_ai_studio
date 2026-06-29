@@ -146,6 +146,3 @@ The app uses Supabase with a `issues` table. Key columns: `id`, `title`, `descri
 
 ---
 
-## License
-
-MIT
